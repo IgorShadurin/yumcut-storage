@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "PORT=3333 next dev --turbopack",
-    "build": "next build --turbopack",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
     "types:check": "tsc --noEmit",
