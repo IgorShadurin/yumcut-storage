@@ -5,13 +5,6 @@ import { verifySignedDaemonUploadGrant, assertDaemonUploadGrantFresh } from '@/l
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const config = {
-  api: {
-    bodyParser: {
-      sizeLimit: '1024mb',
-    },
-  },
-};
 
 type Params = { projectId: string };
 
