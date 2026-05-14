@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { withApiError, forbidden, error, ok } from '@/lib/http';
-import { persistCharacterImage } from '@/server/storage';
+import { persistCharacterAsset } from '@/server/storage';
 import { verifySignedDaemonUploadGrant, assertDaemonUploadGrantFresh } from '@/lib/upload-signature';
 
 export const runtime = 'nodejs';
@@ -27,7 +27,7 @@ export const POST = withApiError(async function POST(req: NextRequest) {
     return forbidden(message);
   }
 
-  if (!['image', 'character-image'].includes(payload.kind)) {
+  if (!['image', 'character-image', 'video'].includes(payload.kind)) {
     return error('VALIDATION_ERROR', 'Unsupported daemon upload kind for characters', 400);
   }
 
@@ -40,6 +40,6 @@ export const POST = withApiError(async function POST(req: NextRequest) {
     return error('VALIDATION_ERROR', 'Payload too large', 400);
   }
 
-  const stored = await persistCharacterImage(buffer, file.name);
+  const stored = await persistCharacterAsset(buffer, file.name);
   return ok({ path: stored.relativePath, url: stored.url, projectId: payload.projectId });
-}, 'Failed to persist character image');
+}, 'Failed to persist character asset');

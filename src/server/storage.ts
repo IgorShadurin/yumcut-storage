@@ -137,6 +137,10 @@ export async function persistDaemonUpload(kind: 'audio' | 'image' | 'video' | 'c
 }
 
 export async function persistCharacterImage(data: Uint8Array, originalName?: string) {
+  return persistCharacterAsset(data, originalName);
+}
+
+export async function persistCharacterAsset(data: Uint8Array, originalName?: string) {
   const stored = await persistDaemonUpload('character-image', data, originalName);
   return { relativePath: stored.relativePath, absolutePath: stored.absolutePath, url: stored.publicUrl };
 }
