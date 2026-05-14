@@ -80,4 +80,23 @@ describe('media route byte ranges', () => {
     expect(res.headers.get('content-length')).toBe('3');
     expect(await res.text()).toBe('');
   });
+
+  it('serves multipart byte ranges used by native media probes', async () => {
+    const segments = await writeSampleFile();
+    const route = await loadRoute();
+
+    const res = await route.GET(
+      request(`http://localhost/api/media/${segments.join('/')}`, { range: 'bytes=0-1,-3' }),
+      params(segments),
+    );
+
+    expect(res.status).toBe(206);
+    expect(res.headers.get('content-type')).toMatch(/^multipart\/byteranges; boundary=yumcut-/);
+
+    const body = await res.text();
+    expect(body).toContain('Content-Range: bytes 0-1/10');
+    expect(body).toContain('Content-Range: bytes 7-9/10');
+    expect(body).toContain('\r\n01\r\n');
+    expect(body).toContain('\r\n789\r\n');
+  });
 });

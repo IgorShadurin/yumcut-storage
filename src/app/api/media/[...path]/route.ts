@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import path from 'node:path';
 import fs from 'fs';
+import crypto from 'node:crypto';
 import { withApiError, unauthorized, forbidden, notFound } from '@/lib/http';
 import { detectMimeType, resolveMediaAbsolutePath, toStoredMediaPath } from '@/server/storage';
 import { verifySignedMediaDownloadGrant, assertMediaDownloadGrantFresh } from '@/lib/upload-signature';
@@ -123,10 +124,10 @@ function streamToReadable(stream: fs.ReadStream, signal?: AbortSignal) {
   });
 }
 
-function parseByteRange(range: string, size: number): ByteRange | null {
+function parseByteRangeSpec(spec: string, size: number): ByteRange | null {
   if (!Number.isSafeInteger(size) || size <= 0) return null;
 
-  const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+  const match = /^(\d*)-(\d*)$/.exec(spec.trim());
   if (!match) return null;
 
   const [, rawStart, rawEnd] = match;
@@ -152,6 +153,100 @@ function parseByteRange(range: string, size: number): ByteRange | null {
   }
 
   return { start, end: Math.min(end, size - 1) };
+}
+
+function parseByteRanges(range: string, size: number): ByteRange[] | null {
+  const trimmed = range.trim();
+  if (!trimmed.toLowerCase().startsWith('bytes=')) return null;
+
+  const specs = trimmed.slice('bytes='.length).split(',').map((entry) => entry.trim()).filter(Boolean);
+  if (specs.length === 0) return null;
+
+  const ranges: ByteRange[] = [];
+  for (const spec of specs) {
+    const parsed = parseByteRangeSpec(spec, size);
+    if (!parsed) return null;
+    ranges.push(parsed);
+  }
+  return ranges;
+}
+
+function streamRangeToController(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  absolutePath: string,
+  range: ByteRange,
+  signal?: AbortSignal,
+) {
+  return new Promise<void>((resolve, reject) => {
+    const stream = fs.createReadStream(absolutePath, { start: range.start, end: range.end });
+    let finished = false;
+
+    const cleanup = () => {
+      stream.off('data', onData);
+      stream.off('end', onEnd);
+      stream.off('error', onError);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const finish = (fn: () => void) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      fn();
+    };
+    const onData = (chunk: Buffer | string) => {
+      if (finished) return;
+      controller.enqueue(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+    };
+    const onEnd = () => finish(resolve);
+    const onError = (err: Error) => finish(() => reject(err));
+    const onAbort = () => finish(() => {
+      stream.destroy();
+      resolve();
+    });
+
+    stream.on('data', onData);
+    stream.once('end', onEnd);
+    stream.once('error', onError);
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function streamMultipartRangesToReadable(
+  absolutePath: string,
+  ranges: ByteRange[],
+  size: number,
+  contentType: string,
+  boundary: string,
+  signal?: AbortSignal,
+) {
+  const encoder = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    async start(controller) {
+      try {
+        for (const range of ranges) {
+          if (signal?.aborted) break;
+          controller.enqueue(encoder.encode(
+            `--${boundary}\r\n` +
+            `Content-Type: ${contentType}\r\n` +
+            `Content-Range: bytes ${range.start}-${range.end}/${size}\r\n\r\n`,
+          ));
+          await streamRangeToController(controller, absolutePath, range, signal);
+          if (signal?.aborted) break;
+          controller.enqueue(encoder.encode('\r\n'));
+        }
+        if (!signal?.aborted) {
+          controller.enqueue(encoder.encode(`--${boundary}--\r\n`));
+        }
+        controller.close();
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+  });
 }
 
 async function serveMedia(req: NextRequest, { params }: { params: Promise<Params> }, headOnly = false) {
@@ -225,8 +320,8 @@ async function serveMedia(req: NextRequest, { params }: { params: Promise<Params
   }
 
   if (range) {
-    const parsedRange = parseByteRange(range, stats.size);
-    if (!parsedRange) {
+    const ranges = parseByteRanges(range, stats.size);
+    if (!ranges) {
       return new NextResponse(null, {
         status: 416,
         headers: {
@@ -236,7 +331,21 @@ async function serveMedia(req: NextRequest, { params }: { params: Promise<Params
         },
       });
     }
-    const { start, end } = parsedRange;
+    if (ranges.length > 1) {
+      const boundary = `yumcut-${crypto.randomUUID()}`;
+      const body = headOnly
+        ? null
+        : streamMultipartRangesToReadable(absolutePath, ranges, stats.size, contentType, boundary, req.signal);
+      return new NextResponse(body, {
+        status: 206,
+        headers: {
+          ...baseHeaders,
+          'content-type': `multipart/byteranges; boundary=${boundary}`,
+        },
+      });
+    }
+
+    const { start, end } = ranges[0];
     const chunkSize = end - start + 1;
     const body = headOnly ? null : streamToReadable(fs.createReadStream(absolutePath, { start, end }), req.signal);
     return new NextResponse(body, {
