@@ -30,6 +30,13 @@
     "tailwindcss": "^4.2.4",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.2",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.6"
+  },
+  "overrides": {
+    "postcss": "^8.5.14",
+    "flatted": "^3.4.2",
+    "vitest": {
+      "picomatch": "^4.0.4"
+    }
   }
 }
