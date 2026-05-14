@@ -10,6 +10,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 type Params = { path: string[] };
+type ByteRange = { start: number; end: number };
 
 function sanitizeSegments(segments: string[]): string {
   return segments.map((segment) => decodeURIComponent(segment)).join('/');
@@ -41,7 +42,7 @@ function applyCorsHeaders(req: NextRequest, headers: Record<string, string>) {
 
 function buildPreflightResponse(req: NextRequest) {
   const headers = applyCorsHeaders(req, {
-    'access-control-allow-methods': 'GET,OPTIONS',
+    'access-control-allow-methods': 'GET,HEAD,OPTIONS',
     'access-control-allow-headers': req.headers.get('access-control-request-headers') || 'Range,Content-Type',
     'access-control-max-age': '86400',
   });
@@ -122,7 +123,38 @@ function streamToReadable(stream: fs.ReadStream, signal?: AbortSignal) {
   });
 }
 
-export const GET = withApiError(async function GET(req: NextRequest, { params }: { params: Promise<Params> }) {
+function parseByteRange(range: string, size: number): ByteRange | null {
+  if (!Number.isSafeInteger(size) || size <= 0) return null;
+
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+  if (!match) return null;
+
+  const [, rawStart, rawEnd] = match;
+  if (!rawStart && !rawEnd) return null;
+
+  if (!rawStart) {
+    const suffixLength = Number(rawEnd);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return null;
+    const start = Math.max(size - suffixLength, 0);
+    return { start, end: size - 1 };
+  }
+
+  const start = Number(rawStart);
+  const end = rawEnd ? Number(rawEnd) : size - 1;
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    start < 0 ||
+    start > end ||
+    start >= size
+  ) {
+    return null;
+  }
+
+  return { start, end: Math.min(end, size - 1) };
+}
+
+async function serveMedia(req: NextRequest, { params }: { params: Promise<Params> }, headOnly = false) {
   const { path: rawSegments } = await params;
   if (!rawSegments || rawSegments.length === 0) return notFound('File not found');
   const requestedPath = sanitizeSegments(rawSegments);
@@ -193,24 +225,21 @@ export const GET = withApiError(async function GET(req: NextRequest, { params }:
   }
 
   if (range) {
-    const match = /bytes=(\d+)-(\d*)/.exec(range);
-    if (!match) {
+    const parsedRange = parseByteRange(range, stats.size);
+    if (!parsedRange) {
       return new NextResponse(null, {
         status: 416,
-        headers: { 'content-range': `bytes */${stats.size}` },
+        headers: {
+          ...baseHeaders,
+          'content-range': `bytes */${stats.size}`,
+          'content-length': '0',
+        },
       });
     }
-    const start = Number(match[1]);
-    const end = match[2] ? Number(match[2]) : stats.size - 1;
-    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || end >= stats.size) {
-      return new NextResponse(null, {
-        status: 416,
-        headers: { 'content-range': `bytes */${stats.size}` },
-      });
-    }
+    const { start, end } = parsedRange;
     const chunkSize = end - start + 1;
-    const stream = fs.createReadStream(absolutePath, { start, end });
-    return new NextResponse(streamToReadable(stream, req.signal), {
+    const body = headOnly ? null : streamToReadable(fs.createReadStream(absolutePath, { start, end }), req.signal);
+    return new NextResponse(body, {
       status: 206,
       headers: {
         ...baseHeaders,
@@ -220,12 +249,20 @@ export const GET = withApiError(async function GET(req: NextRequest, { params }:
     });
   }
 
-  const stream = fs.createReadStream(absolutePath);
-  return new NextResponse(streamToReadable(stream, req.signal), {
+  const body = headOnly ? null : streamToReadable(fs.createReadStream(absolutePath), req.signal);
+  return new NextResponse(body, {
     status: 200,
     headers: {
       ...baseHeaders,
       'content-length': `${stats.size}`,
     },
   });
+}
+
+export const GET = withApiError(async function GET(req: NextRequest, context: { params: Promise<Params> }) {
+  return serveMedia(req, context, false);
 }, 'Failed to load media');
+
+export const HEAD = withApiError(async function HEAD(req: NextRequest, context: { params: Promise<Params> }) {
+  return serveMedia(req, context, true);
+}, 'Failed to load media headers');
