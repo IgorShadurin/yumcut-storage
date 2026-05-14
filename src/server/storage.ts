@@ -155,7 +155,8 @@ export function resolveMediaAbsolutePath(relativePath: string) {
   segments.forEach(ensureNoTraversal);
   const absolute = path.resolve(root, ...segments);
   const normalizedRoot = path.resolve(root);
-  if (!absolute.startsWith(normalizedRoot)) {
+  const relative = path.relative(normalizedRoot, absolute);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new Error('Requested media path escapes root');
   }
   return absolute;

@@ -3,17 +3,20 @@ import { config } from '@/server/config';
 
 const DEFAULT_ALLOWED_HEADERS = 'content-type';
 const DEFAULT_ALLOWED_METHODS = 'POST,OPTIONS';
+const DEV_ALLOWED_ORIGINS = ['http://localhost:3000', 'http://localhost:3001'];
 
 function parseAllowedOrigins() {
   const raw = process.env.STORAGE_ALLOWED_ORIGINS || config.STORAGE_ALLOWED_ORIGINS || '';
-  return raw.split(',').map((origin) => origin.trim()).filter(Boolean);
+  const configured = raw.split(',').map((origin) => origin.trim()).filter(Boolean);
+  if (configured.length > 0) return configured;
+  return process.env['NODE_ENV'] === 'production' ? [] : DEV_ALLOWED_ORIGINS;
 }
 
 export function resolveStorageCorsOrigin(req: NextRequest): string | null {
   const origin = req.headers.get('origin');
   if (!origin) return null;
   const allowed = parseAllowedOrigins();
-  if (allowed.length === 0 || allowed.includes(origin)) {
+  if (allowed.includes(origin)) {
     return origin;
   }
   return null;

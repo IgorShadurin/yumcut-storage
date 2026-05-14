@@ -13,11 +13,6 @@ type StorageAssetResponse =
   | { kind: 'image'; path: string; url: string }
   | { kind: 'video'; path: string; url: string; isFinal: boolean };
 
-async function readFileBuffer(file: File) {
-  const arrayBuffer = await file.arrayBuffer();
-  return new Uint8Array(arrayBuffer);
-}
-
 export const POST = withApiError(async function POST(req: NextRequest, { params }: { params: Promise<Params> }) {
   const { projectId } = await params;
   const formData = await req.formData();
@@ -56,13 +51,16 @@ export const POST = withApiError(async function POST(req: NextRequest, { params 
     return forbidden('Upload grant kind does not match payload');
   }
 
-  const bytes = await readFileBuffer(fileValue);
-  if (bytes.byteLength > payload.maxBytes) {
+  if (fileValue.size > payload.maxBytes) {
     return error('VALIDATION_ERROR', 'Payload too large for grant', 400);
   }
   const mime = fileValue.type || '';
   if (!payload.mimeTypes.includes(mime)) {
     return error('VALIDATION_ERROR', 'Mime type not allowed', 400);
+  }
+  const bytes = new Uint8Array(await fileValue.arrayBuffer());
+  if (bytes.byteLength > payload.maxBytes) {
+    return error('VALIDATION_ERROR', 'Payload too large for grant', 400);
   }
 
   const stored = await persistDaemonUpload(kind, bytes, fileValue.name);

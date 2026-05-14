@@ -28,7 +28,7 @@ afterAll(async () => {
   delete process.env.UPLOAD_SIGNING_PRIVATE_KEY;
 });
 
-async function makeRequest(kind: 'character-image' | 'video', file: File) {
+async function makeRequest(kind: 'character-image' | 'image' | 'video', file: File) {
   vi.resetModules();
   const signatures = await import('@/lib/upload-signature');
   const route = await import('@/app/api/storage/characters/route');
@@ -63,5 +63,29 @@ describe('POST /api/storage/characters', () => {
     expect(body.path).toMatch(/^characters\/\d{4}\/\d{2}\/\d{2}\/.+\.mp4$/);
     expect(body.url).toBe(`http://localhost:3333/api/media/${body.path}`);
     await expect(fs.access(path.join(tmpRoot, body.path))).resolves.toBeUndefined();
+  });
+
+  it('stores character assets using an extension derived from the allowed mime type', async () => {
+    const res = await makeRequest('video', new File([new Uint8Array([5, 6])], 'preview.html', { type: 'video/mp4' }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.path).toMatch(/^characters\/\d{4}\/\d{2}\/\d{2}\/.+\.mp4$/);
+    expect(body.path).not.toMatch(/\.html$/);
+  });
+
+  it('rejects broad daemon image grants for the characters endpoint', async () => {
+    const res = await makeRequest('image', new File([new Uint8Array([7, 8])], 'prepared.webp', { type: 'image/webp' }));
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({
+      error: { code: 'VALIDATION_ERROR', message: 'Unsupported daemon upload kind for characters' },
+    });
+  });
+
+  it('rejects unsupported character asset mime types even when they are signed into the grant', async () => {
+    const res = await makeRequest('video', new File([new Uint8Array([9, 10])], 'preview.html', { type: 'text/html' }));
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({
+      error: { code: 'VALIDATION_ERROR', message: 'Mime type not allowed' },
+    });
   });
 });

@@ -5,6 +5,11 @@ import { persistCharacterImage } from '@/server/storage';
 import { applyStorageCors, resolveStorageCorsOrigin, storageCorsPreflight } from '@/lib/storage-cors';
 
 const MAX_DIMENSION = 2000;
+const SAFE_IMAGE_EXTENSIONS_BY_MIME: Record<string, string> = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+};
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -41,11 +46,16 @@ export async function POST(req: NextRequest) {
       return applyStorageCors(forbidden('Upload authorization purpose mismatch'), origin);
     }
 
-    const buffer = new Uint8Array(await file.arrayBuffer());
     const mime = file.type || '';
-    if (!payload.mimeTypes.includes(mime)) {
+    const safeExtension = SAFE_IMAGE_EXTENSIONS_BY_MIME[mime];
+    if (!safeExtension || !payload.mimeTypes.includes(mime)) {
       return applyStorageCors(error('VALIDATION_ERROR', 'Only allowed mime types can be uploaded', 400), origin);
     }
+    if (file.size > payload.maxBytes) {
+      return applyStorageCors(error('VALIDATION_ERROR', `File must be ${Math.floor(payload.maxBytes / 1024 / 1024)}MB or smaller`, 400), origin);
+    }
+
+    const buffer = new Uint8Array(await file.arrayBuffer());
     if (buffer.byteLength > payload.maxBytes) {
       return applyStorageCors(error('VALIDATION_ERROR', `File must be ${Math.floor(payload.maxBytes / 1024 / 1024)}MB or smaller`, 400), origin);
     }
@@ -60,7 +70,7 @@ export async function POST(req: NextRequest) {
       return applyStorageCors(error('VALIDATION_ERROR', 'Image must be at most 2000x2000 pixels', 400), origin);
     }
 
-    const stored = await persistCharacterImage(buffer, file.name);
+    const stored = await persistCharacterImage(buffer, `image${safeExtension}`);
     return applyStorageCors(ok({
       data,
       signature,
