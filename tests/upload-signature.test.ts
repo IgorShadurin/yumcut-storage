@@ -49,6 +49,20 @@ describe('storage commands', () => {
     expect(verified.paths).toEqual(['audio/one.wav', 'video/two.mp4']);
   });
 
+  it('issues and verifies resize-character-image commands', async () => {
+    const signatures = await loadSignatures();
+    const issued = signatures.issueSignedStorageCommand({
+      type: 'resize-character-image',
+      userId: 'admin-character-catalog',
+      path: 'characters/2026/05/14/source.webp',
+      height: 896,
+    });
+    const verified = signatures.verifySignedStorageCommand(issued.data, issued.signature);
+    expect(verified.type).toBe('resize-character-image');
+    expect(verified.path).toBe('characters/2026/05/14/source.webp');
+    expect(verified.height).toBe(896);
+  });
+
   it('rejects upload grants reused as storage commands', async () => {
     const signatures = await loadSignatures();
     const uploadGrant = signatures.issueSignedUploadGrant({

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export type UploadGrantPurpose = 'user-character-image';
-export type StorageCommandType = 'delete-character-image' | 'delete-user-media';
+export type StorageCommandType = 'delete-character-image' | 'delete-user-media' | 'resize-character-image';
 export type DaemonAssetKind = 'audio' | 'image' | 'video' | 'character-image';
 
 export interface UploadGrantPayload {
@@ -28,6 +28,7 @@ export interface StorageCommandPayload {
   userId: string;
   path?: string;
   paths?: string[];
+  height?: number;
   issuedAt: string;
   expiresAt: string;
   nonce: string;
@@ -189,6 +190,7 @@ export function issueSignedStorageCommand(params: {
   userId: string;
   path?: string;
   paths?: string[];
+  height?: number;
   ttlMs?: number;
 }): SignedStorageCommand & { payload: StorageCommandPayload } {
   if (!params.userId || params.userId.trim().length === 0) {
@@ -204,8 +206,11 @@ export function issueSignedStorageCommand(params: {
   if (uniquePaths.length === 0) {
     throw new Error('Storage command requires at least one path');
   }
-  if (params.type === 'delete-character-image' && uniquePaths.length !== 1) {
-    throw new Error('delete-character-image command supports exactly one path');
+  if ((params.type === 'delete-character-image' || params.type === 'resize-character-image') && uniquePaths.length !== 1) {
+    throw new Error(`${params.type} command supports exactly one path`);
+  }
+  if (params.type === 'resize-character-image' && (!Number.isSafeInteger(params.height) || Number(params.height) <= 0)) {
+    throw new Error('resize-character-image command requires a positive height');
   }
   const now = new Date();
   const ttl = params.ttlMs && params.ttlMs > 0 ? params.ttlMs : DEFAULT_TTL_MS;
@@ -218,10 +223,13 @@ export function issueSignedStorageCommand(params: {
     expiresAt: expires.toISOString(),
     nonce: Buffer.from(randomBytes(16)).toString('hex'),
   };
-  if (params.type === 'delete-character-image') {
+  if (params.type === 'delete-character-image' || params.type === 'resize-character-image') {
     payload.path = uniquePaths[0];
   } else {
     payload.paths = uniquePaths;
+  }
+  if (params.type === 'resize-character-image') {
+    payload.height = Number(params.height);
   }
   const data = canonicalSerialize(payload);
   const signer = crypto.createSign('RSA-SHA256');
@@ -253,11 +261,15 @@ export function verifySignedStorageCommand(data: string, signature: string): Sto
   }
   const payload = parsed as StorageCommandPayload;
   if (payload.version !== 1) throw new Error('Signed storage payload has unsupported version');
-  if (payload.type !== 'delete-character-image' && payload.type !== 'delete-user-media') {
+  if (
+    payload.type !== 'delete-character-image' &&
+    payload.type !== 'delete-user-media' &&
+    payload.type !== 'resize-character-image'
+  ) {
     throw new Error('Signed storage payload has unsupported type');
   }
   if (typeof payload.userId !== 'string' || payload.userId.length === 0) throw new Error('Signed payload missing userId');
-  if (payload.type === 'delete-character-image') {
+  if (payload.type === 'delete-character-image' || payload.type === 'resize-character-image') {
     if (typeof payload.path !== 'string' || payload.path.length === 0) throw new Error('Signed payload missing path');
   } else {
     if (!Array.isArray(payload.paths) || payload.paths.length === 0) {
@@ -268,6 +280,11 @@ export function verifySignedStorageCommand(data: string, signature: string): Sto
         throw new Error(`Signed payload has invalid path entry at index ${index}`);
       }
     });
+  }
+  if (payload.type === 'resize-character-image') {
+    if (!Number.isSafeInteger(payload.height) || Number(payload.height) <= 0) {
+      throw new Error('Signed payload missing height');
+    }
   }
   if (typeof payload.issuedAt !== 'string' || typeof payload.expiresAt !== 'string') throw new Error('Signed payload missing timestamps');
   if (typeof payload.nonce !== 'string' || payload.nonce.length === 0) throw new Error('Signed payload missing nonce');
